@@ -1,8 +1,19 @@
 from enum import StrEnum
 
-
 # 역할 정의
 class Role(StrEnum) :
+    """
+    사용자 역할이자 리소스 접근에 필요한 최소 권한
+
+    2가지 용도로 활용
+    1. 사용자의 역할 : 
+        - 요청한 사용자가 가진 권한 (비로그인 사용자는 ALL)
+    2. 요구 권한 : 
+        - 게시판 읽기/쓰기 등에 필요한 최소 권한
+        - 권한은 계층 구조이며, 상위 역할은 하위 역할의 권한을  모두 포함
+        - ADMIN(2) > USER(1) > ALL(0)
+    """
+
     ALL = "ALL" # 비회원 포함 모두
     USER = "USER" # 회원 + 관리자
     ADMIN = "ADMIN" # 관리자만
@@ -10,7 +21,8 @@ class Role(StrEnum) :
     @property
     def level(self) -> int :
         """
-        권한 가중치 (상위 권한 포함 여부 판별 목적)
+        권한 비교에 사용하는 가중치
+        값이 클수록 상위 권한
         """
         _levels = {
             Role.ALL : 0,
@@ -31,6 +43,11 @@ class Role(StrEnum) :
 
 # 게시글 검색 타입
 class PostSearchType(StrEnum) :
+    """
+    게시글 검색 조건
+    검색어를 어떤 필드에서 찾을지 지정
+    """
+
     ALL = "ALL"
     TITLE = "TITLE"
     CONTENT = "CONTENT"
