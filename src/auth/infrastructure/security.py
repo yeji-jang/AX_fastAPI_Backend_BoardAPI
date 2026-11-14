@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -11,14 +14,15 @@ from shared.core.exceptions import UnauthorizedException
 class JwtTokenProvider(TokenProvider):
     def __init__(
         self,
-        # HS512 권장 규격에 맞춰 최소 64바이트(512비트) 이상의 시크릿 키 권장
-        secret_key: str = os.getenv("JWT_SECRET_KEY", "your-at-least-64-bytes-long-super-secure-secret-key-for-hs512-algorithm-safety!"),
+        secret_key: str | None = None,
         algorithm: str = "HS512",
         access_token_expire_minutes: int = 60,
     ):
-        self.secret_key = secret_key
+        # 기본값 없이 환경 변수에서만 읽음 (없으면 서버 시작 시 KeyError로 바로 알 수 있음)
+        self.secret_key = secret_key or os.environ["JWT_SECRET_KEY"]
         self.algorithm = algorithm
         self.expire_minutes = access_token_expire_minutes
+
 
     def create_access_token(self, user_id: uuid.UUID) -> tuple[str, str, datetime, int]:
         now = datetime.now(timezone.utc)
