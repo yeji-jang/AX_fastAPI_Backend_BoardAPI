@@ -12,6 +12,11 @@
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white)
 ![JWT](https://img.shields.io/badge/JWT-000000?style=flat-square&logo=jsonwebtokens&logoColor=white)
 ![uv](https://img.shields.io/badge/uv-DE5FE9?style=flat-square&logo=uv&logoColor=white)
+![AWS EC2](https://img.shields.io/badge/AWS_EC2-FF9900?style=flat-square&logo=amazonec2&logoColor=white)
+
+### 🌐 [배포 주소 바로가기](http://<EC2-퍼블릭-IP>:8000/docs)
+
+`http://<EC2-퍼블릭-IP>:8000/docs`
 
 </div>
 
@@ -110,8 +115,8 @@ src/
 ### 2. 저장소 받기 & 패키지 설치
 
 ```bash
-git clone https://github.com/yeji-jang/fastAPI-Backend---Board.git
-cd fastAPI-Backend---Board
+git clone https://github.com/yeji-jang/AX_fastAPI_Backend_BoardAPI.git
+cd AX_fastAPI_Backend_BoardAPI
 uv sync
 ```
 
@@ -153,6 +158,8 @@ JWT_SECRET_KEY="여기에-64자-이상의-랜덤-문자열"
 uv run uvicorn main:app --reload --app-dir src
 ```
 
+> ⚠️ 반드시 **프로젝트 루트**(`.env`가 있는 폴더)에서 실행해 주세요. 상위 폴더에서 실행하면 `.env`를 찾지 못해 `KeyError: 'JWT_SECRET_KEY'`로 멈춰요.
+
 서버가 시작되면 테이블이 자동으로 만들어져요.
 
 | 문서 | 주소 |
@@ -170,6 +177,137 @@ docker exec -it board-db psql -U postgres -c "UPDATE users SET role='ADMIN' WHER
 
 ---
 
+## ☁️ 배포 (AWS EC2)
+
+AWS EC2(Ubuntu) 한 대에서 PostgreSQL은 Docker 컨테이너로, API 서버는 systemd 서비스로 실행해요.
+
+```mermaid
+flowchart LR
+    U["🧑‍💻 사용자<br/>브라우저"] -- "HTTP :8000" --> SG["🛡️ 보안 그룹<br/>22 · 8000만 허용"]
+    subgraph EC2["☁️ AWS EC2 · Ubuntu"]
+        S["⚙️ systemd<br/>board.service"] --> API["🚀 Uvicorn<br/>FastAPI 앱"]
+        API -- "localhost:5432" --> DB[("🐘 PostgreSQL<br/>Docker 컨테이너")]
+    end
+    SG --> API
+```
+
+| 구성 | 내용 |
+|---|---|
+| 서버 | AWS EC2, Ubuntu 26.04 LTS |
+| 런타임 | Python 3.13 (uv가 설치 · 관리) |
+| DB | PostgreSQL (Docker 컨테이너), 전용 DB `board` |
+| 프로세스 관리 | systemd: 터미널을 닫아도 실행, 오류 시 5초 후 재시작, 재부팅 시 자동 시작 |
+| 열린 포트 | `22` (SSH), `8000` (API) · DB 포트 `5432`는 외부에 열지 않음 |
+
+### 배포 순서
+
+<details>
+<summary><b>1. 코드 받기 & 패키지 설치</b></summary>
+
+```bash
+git clone https://github.com/yeji-jang/AX_fastAPI_Backend_BoardAPI.git
+cd AX_fastAPI_Backend_BoardAPI
+uv sync --frozen    # uv.lock과 똑같은 버전으로 설치
+```
+
+</details>
+
+<details>
+<summary><b>2. 게시판 전용 DB 만들기</b></summary>
+
+PostgreSQL 컨테이너(이름 `postgres`)가 실행 중인 상태에서:
+
+```bash
+sudo docker exec postgres psql -U postgres -c "CREATE DATABASE board;"
+```
+
+</details>
+
+<details>
+<summary><b>3. 환경 변수(.env) 작성</b></summary>
+
+`.env`는 Git에 올리지 않으므로 서버에서 직접 만들어요. JWT 키는 서버에서 새로 생성해요.
+
+```bash
+JWT=$(python3 -c "import secrets; print(secrets.token_urlsafe(64))")
+cat > .env <<EOF
+DATABASE_URL=postgresql+asyncpg://postgres:<DB비밀번호>@localhost:5432/board
+SQL_ECHO=False
+CONNECTION_POOL_SIZE=10
+CONNECTION_POOL_MAX_SIZE=20
+LOGGING_MODE=info
+LOGGER_NAME=app
+JWT_SECRET_KEY=$JWT
+EOF
+chmod 600 .env    # 소유자만 읽기/쓰기
+```
+
+</details>
+
+<details>
+<summary><b>4. systemd 서비스 등록</b></summary>
+
+```bash
+sudo tee /etc/systemd/system/board.service > /dev/null <<'EOF'
+[Unit]
+Description=Board FastAPI Server
+After=network.target docker.service
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/AX_fastAPI_Backend_BoardAPI
+ExecStart=/home/ubuntu/AX_fastAPI_Backend_BoardAPI/.venv/bin/uvicorn main:app --app-dir src --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now board
+```
+
+- `--host 0.0.0.0`: 외부 접속을 받기 위해 필요해요 (기본값 `127.0.0.1`은 서버 자신만 접속 가능).
+- `--reload`는 개발용이라 서버에서는 쓰지 않아요.
+
+</details>
+
+<details>
+<summary><b>5. 보안 그룹에서 8000 포트 열기</b></summary>
+
+EC2 → 인스턴스 → 보안 탭 → 보안 그룹 → 인바운드 규칙에 추가:
+
+| 유형 | 포트 | 소스 |
+|---|---|---|
+| 사용자 지정 TCP | `8000` | `0.0.0.0/0` |
+
+</details>
+
+### 운영 명령어
+
+| 하고 싶은 일 | 명령어 |
+|---|---|
+| 상태 확인 | `sudo systemctl status board --no-pager` |
+| 최근 로그 50줄 | `sudo journalctl -u board -n 50 --no-pager` |
+| 실시간 로그 | `sudo journalctl -u board -f` |
+| 재시작 | `sudo systemctl restart board` |
+| **새 코드 반영** | `git pull && uv sync --frozen && sudo systemctl restart board` |
+| 8000 포트 사용 프로그램 확인 | `sudo ss -ltnp \| grep 8000` |
+
+### 🧯 트러블슈팅
+
+| 증상 | 원인 | 해결 |
+|---|---|---|
+| Swagger 제목이 다른 프로젝트로 보임 | 다른 서비스가 8000 포트를 먼저 사용 중 | `sudo ss -ltnp \| grep 8000`으로 PID 확인 → `systemctl status <PID>`로 서비스 이름 확인 → 해당 서비스 `stop` · `disable` |
+| `KeyError: 'JWT_SECRET_KEY'` | `.env`를 찾지 못함 | 프로젝트 루트에서 실행하는지, `.env`에 키가 있는지 확인 |
+| `ConnectionRefusedError` | PostgreSQL이 꺼져 있음 | `sudo docker ps -a`로 컨테이너 상태 확인 후 `sudo docker start postgres` |
+| 브라우저에서 접속 안 됨 (시간 초과) | 보안 그룹에서 8000 포트가 닫혀 있음 | 인바운드 규칙에 8000 추가 |
+
+> 💡 EC2 인스턴스를 **중지 후 다시 시작하면 퍼블릭 IP가 바뀌어요.** 고정 주소가 필요하면 탄력적 IP(Elastic IP)를 연결하세요.
+
+---
+
 ## 📡 API 목록
 
 > 🔒 = 로그인 필요 · 👑 = 관리자 전용 · 그 밖의 API는 게시판 권한 설정을 따라요.
@@ -179,7 +317,7 @@ docker exec -it board-db psql -U postgres -c "UPDATE users SET role='ADMIN' WHER
 | Method | Endpoint | 설명 |
 |:---:|---|---|
 | `POST` | `/v1/users` | 회원가입 |
-| `PATCH` | `/v1/users/{user_id}/password` | 🔒 비밀번호 변경 |
+| `PATCH` | `/v1/users/{user_id}/password` | 비밀번호 변경 (기존 비밀번호 확인) |
 
 ### 🔐 인증 `/v1/auth`
 
